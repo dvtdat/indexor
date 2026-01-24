@@ -1,14 +1,32 @@
-import { FetchResult, FetchResultModel } from "./model";
-import dbConnect from "@/lib/mongodb";
+import { FetchResult, FETCH_CSV_FILE } from "./model";
+import { appendToCsv, domainExists, getUniqueDomains } from "@/lib/csv";
+
+const CSV_HEADERS = [
+  "url",
+  "domain",
+  "statusCode",
+  "contentType",
+  "responseTime",
+  "fetchedAt",
+  "content",
+];
+
+// Sanitize content for CSV storage: remove newlines and limit length
+function sanitizeContent(content: string, maxLength: number = 50000): string {
+  return content
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .substring(0, maxLength);
+}
 
 export class FetchModule {
   private static readonly MAX_WEBSITES = 10;
   private static readonly TIMEOUT_MS = 10 * 1000;
+
   private static readonly USER_AGENT = "IndexorBot/1.0";
 
-  static async fetchUrl(url: string) {
-    await dbConnect();
-
+  static async fetchUrl(url: string): Promise<FetchResult> {
     const canFetch = await this.canFetchDomain(url);
     if (!canFetch) {
       throw new Error(
@@ -34,41 +52,36 @@ export class FetchModule {
       const responseTime = Date.now() - startTime;
       const body = await response.text();
       const contentType = response.headers.get("content-type") || "text/html";
-
-      const headers: Record<string, string> = {};
-      response.headers.forEach((value, key) => {
-        headers[key] = value;
-      });
-
       const domain = new URL(url).hostname;
       const fetchedAt = new Date();
 
-      await FetchResultModel.create({
+      const csvRow = {
         url,
         domain,
-        statusCode: response.status,
-        headers,
-        body,
+        statusCode: String(response.status),
         contentType,
-        responseTime,
-        fetchedAt,
-      });
+        responseTime: String(responseTime),
+        fetchedAt: fetchedAt.toISOString(),
+        content: sanitizeContent(body),
+      };
+
+      appendToCsv(FETCH_CSV_FILE, csvRow, CSV_HEADERS);
 
       return {
         url,
+        domain,
         statusCode: response.status,
-        headers,
-        body,
         contentType,
         responseTime,
         fetchedAt,
-      } as FetchResult;
+        body,
+      };
     } catch (error) {
       throw new Error(`Failed to fetch ${url}: ${error}`);
     }
   }
 
-  static async validateResponse(result: FetchResult) {
+  static validateResponse(result: FetchResult): boolean {
     if (result.statusCode < 200 || result.statusCode >= 300) {
       return false;
     }
@@ -84,17 +97,14 @@ export class FetchModule {
     return true;
   }
 
-  static async canFetchDomain(url: string) {
-    await dbConnect();
-
+  static canFetchDomain(url: string): boolean {
     const domain = new URL(url).hostname;
 
-    const existingDomain = await FetchResultModel.exists({ domain });
-    if (existingDomain) {
+    if (domainExists(FETCH_CSV_FILE, domain)) {
       return true;
     }
 
-    const uniqueDomains = await FetchResultModel.distinct("domain");
+    const uniqueDomains = getUniqueDomains(FETCH_CSV_FILE);
     return uniqueDomains.length < this.MAX_WEBSITES;
   }
 }

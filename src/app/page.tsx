@@ -10,7 +10,7 @@ export default function Home() {
   const [sameDomainOnly, setSameDomainOnly] = useState(true);
   const [keywords, setKeywords] = useState("");
   const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState<any>(null);
+  const [_results, setResults] = useState<any>(null);
   const [error, setError] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -97,7 +97,7 @@ export default function Home() {
           />
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Only include pages containing at least one of these keywords in
-            results. Pages without keywords won't be crawled further. Leave
+            results. Pages without keywords will not be crawled further. Leave
             empty to crawl all pages.
           </p>
         </div>

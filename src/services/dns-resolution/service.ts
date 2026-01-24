@@ -1,27 +1,46 @@
-import { DnsResultModel } from "./model";
-import dbConnect from "@/lib/mongodb";
+import { DNS_CSV_FILE } from "./model";
+import { appendToCsv, findInCsv, clearCsv } from "@/lib/csv";
 import { promises as dns } from "dns";
+
+interface DnsResultCsv {
+  hostname: string;
+  ipAddresses: string;
+  resolvedAt: string;
+  ttl: string;
+  expiresAt: string;
+}
+
+const CSV_HEADERS = [
+  "hostname",
+  "ipAddresses",
+  "resolvedAt",
+  "ttl",
+  "expiresAt",
+];
 
 export class DnsResolutionModule {
   private static readonly DEFAULT_TTL = 60 * 60;
 
   static async resolve(hostname: string) {
-    await dbConnect();
+    const cached = findInCsv<DnsResultCsv>(
+      DNS_CSV_FILE,
+      CSV_HEADERS,
+      (row) => {
+        if (row.hostname !== hostname) return false;
 
-    const cached = await DnsResultModel.findOne({
-      hostname,
-      $or: [
-        { expiresAt: { $exists: false } },
-        { expiresAt: { $gt: new Date() } },
-      ],
-    });
+        if (!row.expiresAt) return true;
+
+        const expiresAt = new Date(row.expiresAt);
+        return expiresAt > new Date();
+      }
+    );
 
     if (cached) {
       return {
         hostname: cached.hostname,
-        ipAddresses: cached.ipAddresses,
-        resolvedAt: cached.resolvedAt,
-        ttl: cached.ttl,
+        ipAddresses: JSON.parse(cached.ipAddresses || "[]"),
+        resolvedAt: new Date(cached.resolvedAt),
+        ttl: parseInt(cached.ttl) || this.DEFAULT_TTL,
       };
     }
 
@@ -31,17 +50,15 @@ export class DnsResolutionModule {
       const ttl = this.DEFAULT_TTL;
       const expiresAt = new Date(resolvedAt.getTime() + ttl * 1000);
 
-      await DnsResultModel.findOneAndUpdate(
-        { hostname },
-        {
-          hostname,
-          ipAddresses: addresses,
-          resolvedAt,
-          ttl,
-          expiresAt,
-        },
-        { upsert: true, new: true }
-      );
+      const csvRow = {
+        hostname,
+        ipAddresses: JSON.stringify(addresses),
+        resolvedAt: resolvedAt.toISOString(),
+        ttl: String(ttl),
+        expiresAt: expiresAt.toISOString(),
+      };
+
+      appendToCsv(DNS_CSV_FILE, csvRow, CSV_HEADERS);
 
       return {
         hostname,
@@ -55,8 +72,6 @@ export class DnsResolutionModule {
   }
 
   static async reverseResolve(ip: string) {
-    await dbConnect();
-
     try {
       const hostnames = await dns.reverse(ip);
       return hostnames;
@@ -66,21 +81,23 @@ export class DnsResolutionModule {
   }
 
   static async isCached(hostname: string) {
-    await dbConnect();
+    const cached = findInCsv<DnsResultCsv>(
+      DNS_CSV_FILE,
+      CSV_HEADERS,
+      (row) => {
+        if (row.hostname !== hostname) return false;
 
-    const cached = await DnsResultModel.exists({
-      hostname,
-      $or: [
-        { expiresAt: { $exists: false } },
-        { expiresAt: { $gt: new Date() } },
-      ],
-    });
+        if (!row.expiresAt) return true;
 
-    return cached !== null;
+        const expiresAt = new Date(row.expiresAt);
+        return expiresAt > new Date();
+      }
+    );
+
+    return cached !== undefined;
   }
 
   static async clearCache() {
-    await dbConnect();
-    await DnsResultModel.deleteMany({});
+    clearCsv(DNS_CSV_FILE);
   }
 }

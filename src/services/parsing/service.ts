@@ -1,14 +1,22 @@
-import { ParsedContent, ParsedContentModel } from "./model";
-import dbConnect from "@/lib/mongodb";
+import { ParsedContent, PARSED_CSV_FILE } from "./model";
+import { appendToCsv } from "@/lib/csv";
 import * as cheerio from "cheerio";
+
+const CSV_HEADERS = [
+  "url",
+  "title",
+  "description",
+  "links",
+  "images",
+  "text",
+  "parsedAt",
+];
 
 export class ParsingModule {
   static async parseHtml(
     html: string,
     baseUrl: string
   ): Promise<ParsedContent> {
-    await dbConnect();
-
     const $ = cheerio.load(html);
 
     const title =
@@ -22,13 +30,11 @@ export class ParsingModule {
       $('meta[property="og:description"]').attr("content") ||
       "";
 
-    const links = await this.extractLinks(html, baseUrl);
-
-    const text = await this.extractText(html);
-
+    const links = this.extractLinks(html, baseUrl);
+    const text = this.extractText(html);
     const parsedAt = new Date();
 
-    const parsedContent = {
+    return {
       url: baseUrl,
       title,
       description,
@@ -37,17 +43,25 @@ export class ParsingModule {
       text,
       parsedAt,
     };
-
-    await ParsedContentModel.findOneAndUpdate(
-      { url: baseUrl },
-      parsedContent,
-      { upsert: true, new: true }
-    );
-
-    return parsedContent;
   }
 
-  static async extractLinks(html: string, baseUrl: string): Promise<string[]> {
+  static saveToCsv(parsedContent: ParsedContent): void {
+    const sanitize = (str: string) => str.replace(/[\r\n]+/g, " ").trim();
+
+    const csvRow = {
+      url: parsedContent.url,
+      title: sanitize(parsedContent.title || ""),
+      description: sanitize(parsedContent.description || ""),
+      links: JSON.stringify(parsedContent.links),
+      images: JSON.stringify(parsedContent.images),
+      text: sanitize(parsedContent.text),
+      parsedAt: parsedContent.parsedAt.toISOString(),
+    };
+
+    appendToCsv(PARSED_CSV_FILE, csvRow, CSV_HEADERS);
+  }
+
+  static extractLinks(html: string, baseUrl: string): string[] {
     const $ = cheerio.load(html);
     const links = new Set<string>();
 
@@ -71,7 +85,7 @@ export class ParsingModule {
     return Array.from(links);
   }
 
-  static async extractText(html: string): Promise<string> {
+  static extractText(html: string): string {
     const $ = cheerio.load(html);
 
     $("script, style, nav, footer, header").remove();
